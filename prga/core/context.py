@@ -3,7 +3,9 @@
 from __future__ import division, absolute_import, print_function
 from prga.compatible import *
 
-from .common import Global, Segment, ModuleClass, PrimitiveClass, PrimitivePortClass, ModuleView, OrientationTuple
+from .common import (Global, Segment, ModuleClass, PrimitiveClass, PrimitivePortClass, ModuleView, OrientationTuple,
+        DirectTunnel)
+from .builder.primitive import LogicalPrimitiveBuilder, PrimitiveBuilder, MultimodeBuilder
 from .builder.block import ClusterBuilder, IOBlockBuilder, LogicBlockBuilder
 from .builder.box import ConnectionBoxBuilder, SwitchBoxBuilder
 from .builder.array import LeafArrayBuilder, NonLeafArrayBuilder
@@ -24,7 +26,31 @@ try:
 except ImportError:
     import pickle
 
-__all__ = ['Context']
+__all__ = ['ContextSummary', 'Context']
+
+# ----------------------------------------------------------------------------
+# -- FPGA Summary ------------------------------------------------------------
+# ----------------------------------------------------------------------------
+class ContextSummary(Object):
+    """Summary of the FPGA."""
+
+    __slots__ = [
+            # numbers
+            'vpr_channel_width',    # VPR channel width. Updated by `VPRInputsGeneration`
+            'vpr_array_width',      # VPR array width. Updated by `VPRInputsGeneration`
+            'vpr_array_height',     # VPR array height. Updated by `VPRInputsGeneration`
+            'ios',                  # list of IOType, (x, y), subblock. Updated by `VPRInputsGeneration`
+            # architecture status
+            'active_blocks',        # dict of block keys to active orientations. Updated by `VPRInputsGeneration`
+            'active_primitives',    # set of primitive keys. Updated by `VPRInputsGeneration`
+            'lut_sizes',            # set of LUT sizes. Updated by `VPRInputsGeneration` 
+            # output files
+            'vpr_dir',              # path to VPR outputs. Updated by `VPRInputsGeneration`
+            'yosys_script',         # generic yosys synthesis script
+            'rtl_sources',          # dict of module keys to verilog source file names. Updated by `VerilogCollection`
+            # additional attributes
+            '__dict__',
+            ]
 
 # ----------------------------------------------------------------------------
 # -- Architecture Context ----------------------------------------------------
@@ -43,19 +69,25 @@ class Context(Object):
 
     __slots__ = [
             '_globals',             # global wires
-            '_directs',             # direct inter-block tunnels
+            '_tunnels',             # direct inter-block tunnels
             '_segments',            # wire segments
             '_database',            # module database
             '_top',                 # logical top
             '_switch_database',     # switch database
+            '_fasm_delegate',       # FASM delegate
+            'summary',              # FPGA summary
             '__dict__']
 
     def __init__(self, *, database = None, **kwargs):
         self._globals = OrderedDict()
-        self._directs = OrderedDict()
+        self._tunnels = OrderedDict()
         self._segments = OrderedDict()
-        self._database = database or self._new_database()
+        if database is None:
+            self._database = self._new_database()
+        else:
+            self._database = self._new_database()
         self._top = None
+        self.summary = ContextSummary()
         for k, v in iteritems(kwargs):
             setattr(self, k, v)
 
@@ -75,6 +107,7 @@ class Context(Object):
             out = ModuleUtils.create_port(lut, 'out', 1, PortDirection.output,
                     port_class = PrimitivePortClass.lut_out)
             NetUtils.connect(in_, out, fully = True)
+            ModuleUtils.elaborate(lut)
             database[ModuleView.user, lut.key] = lut
 
         # 2. register built-in modules: D-flipflop
@@ -90,6 +123,7 @@ class Context(Object):
                     clock = 'clk', port_class = PrimitivePortClass.D)
             ModuleUtils.create_port(flipflop, 'Q', 1, PortDirection.output,
                     clock = 'clk', port_class = PrimitivePortClass.Q)
+            ModuleUtils.elaborate(flipflop)
             database[ModuleView.user, flipflop.key] = flipflop
 
         # 3. register built-in modules: iopads
@@ -103,6 +137,7 @@ class Context(Object):
                 ModuleUtils.create_port(pad, 'inpad', 1, PortDirection.output)
             if class_ in (PrimitiveClass.outpad, PrimitiveClass.iopad):
                 ModuleUtils.create_port(pad, 'outpad', 1, PortDirection.input_)
+            ModuleUtils.elaborate(pad)
             database[ModuleView.user, pad.key] = pad
 
         return database
@@ -121,6 +156,51 @@ class Context(Object):
         except AttributeError:
             raise PRGAInternalError("Switch database not set.\n"
                     "Possible cause: the context is not created by a configuration circuitry entry point.")
+
+    @property
+    def fasm_delegate(self):
+        """`FASMDelegate`: FASM delegate for bitstream generation."""
+        try:
+            return self._fasm_delegate
+        except AttributeError:
+            raise PRGAInternalError("FASM delegate not set.\n"
+                    "Possible cause: the context is not created by a configuration circuitry entry point.")
+
+    def create_multimode(self, name, **kwargs):
+        """Create a multi-mode primitive builder.
+
+        Args:
+            name (:obj:`str`): Name of the multi-mode primitive
+
+        Keyword Args:
+            **kwargs: Additional attributes to be associated with the primitive
+        """
+        if (ModuleView.user, name) in self._database:
+            raise PRGAAPIError("Module with name '{}' already created".format(name))
+        primitive = self._database[ModuleView.user, name] = MultimodeBuilder.new(name, **kwargs)
+        return MultimodeBuilder(self, primitive)
+
+    def create_logical_primitive(self, name, *, non_leaf = False, **kwargs):
+        """`LogicalPrimitiveBuilder`: Create a logical primitive builder.
+
+        Args:
+            name (:obj:`str`): Name of the logical primitive
+
+        Keyword Args:
+            non_leaf (:obj:`str`): Marks that this primitive includes sub-instances
+            **kwargs: Additional attributes to be associated with the primitive
+        """
+        if (ModuleView.logical, name) in self._database:
+            raise PRGAAPIError("Module with name '{}' already created".format(name))
+        user_view = self._database.get( (ModuleView.user, name) )
+        if user_view:
+            primitive = self._database[ModuleView.logical, name] = LogicalPrimitiveBuilder.new_from_user_view(
+                    user_view, non_leaf = non_leaf, **kwargs)
+            return LogicalPrimitiveBuilder(self, primitive, user_view)
+        else:
+            primitive = self._database[ModuleView.logical, name] = LogicalPrimitiveBuilder.new(
+                    name, non_leaf = non_leaf, **kwargs)
+            return LogicalPrimitiveBuilder(self, primitive)
 
     # == high-level API ======================================================
     # -- Global Wires --------------------------------------------------------
@@ -174,12 +254,62 @@ class Context(Object):
             raise PRGAAPIError("Segment named '{}' is already created".format(name))
         return self._segments.setdefault(name, Segment(name, width, length))
 
+    # -- Direct Inter-Block Tunnels ------------------------------------------
+    @property
+    def tunnels(self):
+        """:obj:`Mapping` [:obj:`str`, `DirectTunnel` ]: A mapping from names to direct inter-block tunnels."""
+        return ReadonlyMappingProxy(self._tunnels)
+
+    def create_tunnel(self, name, source, sink, offset):
+        """Create a direct inter-block tunnel.
+
+        Args:
+            name (:obj:`str`): Name of the tunnel
+            source (`Port`): Source of the tunnel. Must be a logic block output port
+            sink (`Port`): Sink of the tunnel. Must be a logic block input port
+            offset (:obj:`tuple` [:obj:`int`, :obj:`int`] ): Position of the source port relative to the sink port
+                This definition is the opposite of how VPR defines a ``direct`` tag. In addition, ``offset`` is
+                defined based on the position of the ports, not the blocks
+        """
+        if name in self._tunnels:
+            raise PRGAAPIError("Direct tunnel named '{}' is already created".format(name))
+        elif not source.parent.module_class.is_logic_block or not source.direction.is_output:
+            raise PRGAAPIError("Source '{}' is not a logic block output port".format(source))
+        elif not sink.parent.module_class.is_logic_block or not sink.direction.is_input:
+            raise PRGAAPIError("Sink '{}' is not a logic block input port".format(source))
+        return self._tunnels.setdefault(name, DirectTunnel(name, source, sink, offset))
+
     # -- Primitives ----------------------------------------------------------
     @property
     def primitives(self):
         """:obj:`Mapping` [:obj:`str`, `AbstractModule` ]: A mapping from names to primitives."""
         return ReadonlyMappingProxy(self._database, lambda kv: kv[1].module_class.is_primitive,
                 lambda k: (ModuleView.user, k), lambda k: k[1])
+
+    def create_primitive(self, name, **kwargs):
+        """PrimitiveBuilder`: Create a primitive builder."""
+        if (ModuleView.user, name) in self._database:
+            raise PRGAAPIError("Module with name '{}' already created".format(name))
+        primitive = self._database[ModuleView.user, name] = PrimitiveBuilder.new(name, **kwargs)
+        return PrimitiveBuilder(self, primitive)
+
+    def create_memory(self, name, addr_width, data_width, *, single_port = False, **kwargs):
+        """Create a memory builder.
+
+        Args:
+            name (:obj:`str`): Name of the memory
+            addr_width (:obj:`int`): Number of bits of the address ports
+            data_width (:obj:`int`): Number of bits of the data ports
+
+        Keyword Args:
+            single_port (:obj:`bool`): Create one read/write port instead of two
+            **kwargs: Additional attributes to be associated with the primitive
+        """
+        if (ModuleView.user, name) in self._database:
+            raise PRGAAPIError("Module with name '{}' already created".format(name))
+        primitive = self._database[ModuleView.user, name] = PrimitiveBuilder.new_memory(name,
+                addr_width, data_width, single_port = single_port, **kwargs)
+        return PrimitiveBuilder(self, primitive)
 
     # -- Clusters ------------------------------------------------------------
     @property
@@ -330,8 +460,19 @@ class Context(Object):
         else:
             pickle.dump(self, file_)
 
-    @staticmethod
-    def unpickle(file_):
+    def pickle_summary(self, file_):
+        """Pickle the summary into a binary file.
+
+        Args:
+            file_ (:obj:`str` or file-like object): output file or its name
+        """
+        if isinstance(file_, basestring):
+            pickle.dump(self.summary, open(file_, OpenMode.wb))
+        else:
+            pickle.dump(self.summary, file_)
+
+    @classmethod
+    def unpickle(cls, file_):
         """Unpickle a pickled architecture context.
 
         Args:

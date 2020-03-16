@@ -5,7 +5,7 @@ from prga.compatible import *
 
 from ...util import Enum, Abstract, Object
 
-from abc import abstractproperty
+from abc import abstractproperty, abstractmethod
 from enum import Enum
 import networkx as nx
 
@@ -30,7 +30,7 @@ class AbstractModule(Abstract):
     @abstractproperty
     def children(self):
         """:obj:`Mapping` [:obj:`str`, `AbstractPort` or `AbstractInstance` ]: A mapping from names to
-        ports/instances."""
+        ports/immediate instances."""
         raise NotImplementedError
 
     @abstractproperty
@@ -43,10 +43,16 @@ class AbstractModule(Abstract):
         """:obj:`Mapping` [:obj:`Hashable`, `AbstractInstance` ]: A mapping from instance keys to immediate instances."""
         raise NotImplementedError
 
+    @abstractproperty
+    def hierarchy(self):
+        """:obj:`Mapping` [:obj:`Hashable`, `AbstractInstance` ]: A mapping from hierarchical instance keys to
+        hierarchical instances."""
+        raise NotImplementedError
+
 # ----------------------------------------------------------------------------
 # -- Abstract Instance -------------------------------------------------------
 # ----------------------------------------------------------------------------
-class AbstractInstance(Abstract):
+class AbstractInstance(Abstract, Sequence):
     """Abstract class for instances."""
 
     @abstractproperty
@@ -56,7 +62,12 @@ class AbstractInstance(Abstract):
 
     @abstractproperty
     def key(self):
-        """:obj:`Hashable`: A hashable key used to index this instance in its parent module."""
+        """:obj:`Hashable`: A hashable key used to index this instance in its immediate parent module."""
+        raise NotImplementedError
+
+    @abstractproperty
+    def hierarchical_key(self):
+        """:obj:`Hashable`: A hashable key used to index this instance in its ancestor parent module."""
         raise NotImplementedError
 
     @abstractproperty
@@ -74,13 +85,28 @@ class AbstractInstance(Abstract):
         """`AbstractModule`: Model of this instance."""
         raise NotImplementedError
 
+    @abstractmethod
+    def extend(self, hierarchy):
+        """`AbstractInstance`: Extend up the hierarchy."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def delve(self, hierarchy):
+        """`AbstractInstance`: Extend down the hierarchy."""
+        raise NotImplementedError
+
+    @abstractproperty
+    def is_hierarchical(self):
+        """:obj:`bool`: Test if this instance is hierarchical, i.e. not immediate sub-instance of its parent module."""
+        raise NotImplementedError
+
 # ----------------------------------------------------------------------------
 # -- Memory-Optimized DiGraph for Non-Coalesced Connection Graph -------------
 # ----------------------------------------------------------------------------
 class _Placeholder(Enum):
     placeholder = 0
 
-class _NodeDict(MutableMapping):
+class MemOptNonCoalescedNodeDict(MutableMapping):
 
     __slots__ = ['_dict']
     def __init__(self):
@@ -122,16 +148,17 @@ class _NodeDict(MutableMapping):
             self._dict[key] = tuple(_Placeholder.placeholder if i == idx else item for i, item in enumerate(l))
 
     def __len__(self):
-        return sum(len(l) for l in itervalues(self._dict))
+        return sum(1 for _ in iter(self))
 
     def __iter__(self):
         for key, l in iteritems(self._dict):
-            for idx in range(len(l)):
-                yield idx, key
+            for idx, item in enumerate(l):
+                if item is not _Placeholder.placeholder:
+                    yield idx, key
 
 class MemOptNonCoalescedConnGraph(nx.DiGraph):
-    node_dict_factory = _NodeDict
-    adjlist_outer_dict_factory = _NodeDict
+    node_dict_factory = MemOptNonCoalescedNodeDict
+    adjlist_outer_dict_factory = MemOptNonCoalescedNodeDict
 
 class LazyDict(MutableMapping):
     """Memory-optimized lazy dict."""

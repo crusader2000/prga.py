@@ -5,7 +5,7 @@ from prga.compatible import *
 
 from .common import BusType, NetType, AbstractGenericBus, AbstractGenericNet
 from .const import Unconnected, Const
-from ...util import Object, uno
+from ...util import Object, uno, compose_slice
 from ...exception import PRGAInternalError, PRGATypeError, PRGAIndexError
 
 from networkx.exception import NetworkXError
@@ -21,32 +21,6 @@ __all__ = ['NetUtils']
 # ----------------------------------------------------------------------------
 class NetUtils(object):
     """A wrapper class for utility functions for nets."""
-
-    @classmethod
-    def _slice_intersect(cls, src, dst):
-        """``None``, :obj:`int` or :obj:`slice`: Apply :obj:`int` or :obj:`slice` ``dst`` on :obj:`int` or :obj:`slice`
-        ``src``.  If any argument is :obj:`slice`, its ``step`` is ignored and treated as ``1``."""
-        if isinstance(src, int):
-            if (dst == 0 if isinstance(dst, int) else dst.start <= 0 < dst.stop):
-                return src
-            else:
-                raise PRGAIndexError("Index out of range")
-        else:
-            low, high = 0, max(0, src.stop - src.start)
-            if isinstance(dst, int):
-                if low <= dst < high:
-                    return src.start + dst
-                else:
-                    raise PRGAIndexError("Index out of range")
-            else:
-                start = max(low, uno(dst.start, low))
-                stop = min(high, uno(dst.stop, high))
-                if stop <= start:
-                    return None
-                elif stop == start + 1:
-                    return src.start + start
-                else:
-                    return slice(src.start + start, src.start + stop)
 
     @classmethod
     def _slice(cls, bus, index):
@@ -79,6 +53,8 @@ class NetUtils(object):
                 raise PRGAInternalError("Cannot create coalesced reference for {}".format(net))
             else:
                 return net.node
+        elif len(net) != 1:
+            raise PRGAInternalError("Cannot create reference for {}: width > 1".format(net))
         else:
             return (0, net.node) if net.bus_type.is_nonref else net.node
 
@@ -95,26 +71,86 @@ class NetUtils(object):
 
         Return:
             net (`Port`, `Pin`, `Slice` or `Const`): 
-            hierarchy (:obj:`tuple` [`AbstractInstance` ]): Hierarchy in bottom-up order. Only available if
-                ``hierarchical`` is set
         """
         # no matter if `coalesced` is set, check if the node refers to a constant net
         if node[0] is NetType.const:
             return Const(*node[1:])
         index, node = (None, node) if coalesced else node
         net_key, hierarchy = node[0], node[1:]
-        instances, parent = [], module
-        for instance_key in reversed(hierarchy):
-            instance = parent.instances[instance_key]
-            instances.append(instance)
-            parent = instance.model
-        bus = parent.ports[net_key]
-        if instances:
-            bus = bus._to_pin(reversed(instances))
+        bus = module.hierarchy[hierarchy].pins[net_key] if hierarchy else module.ports[net_key]
         if index is not None:
             return bus[index]
         else:
             return bus
+
+    @classmethod
+    def _navigate_backwards(cls, module, endpoint, *,
+            path = tuple(),
+            yield_ = lambda module, node: True,
+            stop = lambda module, node: False,
+            skip = lambda module, node: False):
+        """Navigate the connection graph backwards, yielding startpoints and paths from the startpoints to the
+        endpoints.
+        
+        Args:
+            module (`AbstractModule`): Top-level module to perform navigation
+            endpoint (:obj:`Hashable`): Endpoint for the navigation
+
+        Keyword Arguments:
+            path (:obj:`Sequence` [:obj:`Hashable` ]): Path to be appended to any path reported by this method
+            yield_ (:obj:`Function` [`AbstractModule`, :obj:`Hashable` ] -> :obj:`bool`): Lambda function testing if
+                a node should be emitted during navigation
+            stop (:obj:`Function` [`AbstractModule`, :obj:`Hashable` ] -> :obj:`bool`): Lambda function testing if
+                the navigation should stop at the specified node (i.e. force treating it as a startpoint)
+            skip (:obj:`Function` [`AbstractModule`, :obj:`Hashable` ] -> :obj:`bool`): Lambda function testing if
+                a node should be ignored when reporting the path
+
+        Yields:
+            path (:obj:`Sequence` [:obj:`Hashable` ]): a path to endpoint
+        """
+        # 1. disassemble the node
+        idx, net_key = endpoint
+        # 2. check elaboration status and determine in which module to do the navigation
+        model, hierarchy_key = module, tuple()
+        while len(net_key) >= 3 and net_key[2:] not in model._elaborated:
+            done = False
+            for split in range(3, len(net_key) - 1):
+                cur_up, cur_down = net_key[split:], net_key[:split]
+                if cur_up in model._elaborated:
+                    model = model.hierarchy[cur_up].model
+                    hierarchy_key, net_key = cur_up + hierarchy_key, cur_down
+                    done = True
+                    break
+            if not done:
+                model = model.instances[net_key[-1]].model
+                hierarchy_key, net_key = net_key[-1:] + hierarchy_key, net_key[:-1]
+        # 3. move forward
+        while True:
+            while True:
+                try:
+                    nodes = tuple(model._conn_graph.predecessors( 
+                        net_key if model._coalesce_connections else (idx, net_key) ))
+                except NetworkXError:
+                    break
+                if not nodes:
+                    break
+                for node in nodes:
+                    cur = ((idx, node + hierarchy_key) if model._coalesce_connections else 
+                            (node[0], node[1] + hierarchy_key))
+                    next_path = path if skip( module, cur ) else ((cur, ) + path)
+                    if yield_( module, cur ):
+                        yield next_path
+                    if stop( module, cur ) or 'clock' in model._conn_graph.nodes[node]:
+                        continue
+                    for p in cls._navigate_backwards(module, cur,
+                            path = next_path, yield_ = yield_, stop = stop, skip = skip):
+                        yield p
+                return
+            # 4. one more chance if this net is on the edge of elaboration
+            if len(net_key) != 2:
+                return
+            model, hierarchy_key = model.instances[net_key[1]].model, net_key[1:] + hierarchy_key
+            net_key = net_key[:1]
 
     @classmethod
     def concat(cls, items, *, skip_flatten = False):
@@ -221,7 +257,8 @@ class NetUtils(object):
                     (src, sink))
             if not (module._allow_multisource or
                     sink_node not in module._conn_graph or 
-                    module._conn_graph.in_degree( sink_node ) == 0):
+                    module._conn_graph.in_degree( sink_node ) == 0 or
+                    next(iter(module._conn_graph.predecessors( sink_node ))) == src_node):
                 raise PRGAInternalError(
                         "'{}' does not support multi-source connections. ('{}' is already connected to '{}')"
                         .format(module, sink, cls.get_source(sink)))
@@ -282,60 +319,60 @@ class NetUtils(object):
         except NetworkXError:
             return Unconnected(0)
 
-    @classmethod
-    def get_hierarchical_multisource(cls, sink):
-        """Get the hierarchical sources connected to ``sink``."""
-        if sink.net_type.is_port:
-            if sink.parent._allow_multisource:
-                return cls.get_multisource(sink)
-            else:
-                s = cls.get_source(sink)
-                if s.net_type.is_unconnected:
-                    return Unconnected(0)
-                else:
-                    return s
-        elif sink.net_type.is_pin:
-            flat_sink, hierarchy = None, None
-            if sink.bus_type.is_nonref:
-                if sink.model.direction.is_output:
-                    flat_sink = sink.model
-                    hierarchy = sink.hierarchy
-                else:
-                    flat_sink = sink.model._to_pin(sink.hierarchy[:1])
-                    hierarchy = sink.hierarchy[1:]
-            else:
-                if sink.bus.model.direction.is_output:
-                    flat_sink = sink.bus.model[sink.index]
-                    hierarchy = sink.bus.hierarchy
-                else:
-                    flat_sink = sink.bus.model._to_pin(sink.bus.hierarchy[:1])[sink.index]
-                    hierarchy = sink.bus.hierarchy[1:]
-            flat_sources = None
-            if flat_sink.parent._allow_multisource:
-                flat_sources = cls.get_multisource(flat_sink)
-            else:
-                flat_sources = cls.get_source(flat_sink)
-                if flat_sources.net_type.is_unconnected:
-                    flat_sources = Unconnected(0)
-            if not hierarchy:
-                return cls.concat(flat_sources)
-            else:
-                flat_sources = flat_sources.items if flat_sources.bus_type.is_concat else (flat_sources, )
-                sources = []
-                for source in flat_sources:
-                    if source.bus_type.is_nonref:
-                        if source.net_type.is_port:
-                            sources.append( source._to_pin(hierarchy) )
-                        elif source.net_type.is_pin:
-                            sources.append( source.model._to_pin(source.hierarchy + hierarchy) )
-                        elif source.net_type.is_const:
-                            sources.append( source )
-                    else:
-                        if source.net_type.is_port:
-                            sources.append( source.bus._to_pin(hierarchy)[source.index] )
-                        else:
-                            sources.append( source.bus.model._to_pin(source.bus.hierarchy + hierarchy)[source.index] )
-                return cls.concat(sources)
+    # @classmethod
+    # def get_hierarchical_multisource(cls, sink):
+    #     """Get the hierarchical sources connected to ``sink``."""
+    #     if sink.net_type.is_port:
+    #         if sink.parent._allow_multisource:
+    #             return cls.get_multisource(sink)
+    #         else:
+    #             s = cls.get_source(sink)
+    #             if s.net_type.is_unconnected:
+    #                 return Unconnected(0)
+    #             else:
+    #                 return s
+    #     elif sink.net_type.is_pin:
+    #         flat_sink, hierarchy = None, None
+    #         if sink.bus_type.is_nonref:
+    #             if sink.model.direction.is_output:
+    #                 flat_sink = sink.model
+    #                 hierarchy = sink.hierarchy
+    #             else:
+    #                 flat_sink = sink.model._to_pin(sink.hierarchy[:1])
+    #                 hierarchy = sink.hierarchy[1:]
+    #         else:
+    #             if sink.bus.model.direction.is_output:
+    #                 flat_sink = sink.bus.model[sink.index]
+    #                 hierarchy = sink.bus.hierarchy
+    #             else:
+    #                 flat_sink = sink.bus.model._to_pin(sink.bus.hierarchy[:1])[sink.index]
+    #                 hierarchy = sink.bus.hierarchy[1:]
+    #         flat_sources = None
+    #         if flat_sink.parent._allow_multisource:
+    #             flat_sources = cls.get_multisource(flat_sink)
+    #         else:
+    #             flat_sources = cls.get_source(flat_sink)
+    #             if flat_sources.net_type.is_unconnected:
+    #                 flat_sources = Unconnected(0)
+    #         if not hierarchy:
+    #             return cls.concat(flat_sources)
+    #         else:
+    #             flat_sources = flat_sources.items if flat_sources.bus_type.is_concat else (flat_sources, )
+    #             sources = []
+    #             for source in flat_sources:
+    #                 if source.bus_type.is_nonref:
+    #                     if source.net_type.is_port:
+    #                         sources.append( source._to_pin(hierarchy) )
+    #                     elif source.net_type.is_pin:
+    #                         sources.append( source.model._to_pin(source.hierarchy + hierarchy) )
+    #                     elif source.net_type.is_const:
+    #                         sources.append( source )
+    #                 else:
+    #                     if source.net_type.is_port:
+    #                         sources.append( source.bus._to_pin(hierarchy)[source.index] )
+    #                     else:
+    #                         sources.append( source.bus.model._to_pin(source.bus.hierarchy + hierarchy)[source.index] )
+    #             return cls.concat(sources)
 
     @classmethod
     def get_connection(cls, source, sink):
@@ -429,7 +466,7 @@ class Slice(Object, AbstractGenericNet):
     def __getitem__(self, index):
         if not isinstance(index, int) and not isinstance(index, slice):
             raise PRGATypeError("index", "int or slice")
-        index = NetUtils._slice_intersect(self.index, index)
+        index = compose_slice(self.index, index)
         if index is None:
             return Unconnected(0)
         else:

@@ -5,10 +5,11 @@ from prga.compatible import *
 
 from .base import AbstractPass
 from ..core.common import (Position, Subtile, Orientation, ModuleView, Dimension, BlockPinID, SegmentID, SegmentType,
-        Direction, Corner)
+        Direction, Corner, IOType)
 from ..core.builder.array import NonLeafArrayBuilder
-from ..netlist.net.bus import Pin
+from ..netlist.net.common import NetType
 from ..netlist.net.util import NetUtils
+from ..netlist.module.util import ModuleUtils
 from ..util import Object, uno
 from ..xml import XMLGenerator
 from ..exception import PRGAInternalError
@@ -25,37 +26,40 @@ __all__ = ['FASMDelegate', 'VPRInputsGeneration']
 class FASMDelegate(Object):
     """FASM delegate supplying FASM metadata."""
 
-    def fasm_mux_for_intrablock_switch(self, source, sink):
+    def reset(self):
+        """Reset the delegate."""
+        pass
+
+    def fasm_mux_for_intrablock_switch(self, source, sink, instance = None):
         """Get the "fasm_mux" string for the connection from ``source`` to ``sink``.
 
         Args:
             source (`AbstractGenericNet`): Source bit
             sink (`AbstractGenericNet`): Sink bit
+            instance (`AbstractInstance`): Hierarchical instance in the logic/io block. ``source`` and ``sink`` are
+                both immediate child-nets of this instance if ``instance`` is not None.
         
         Returns:
             :obj:`Sequence` [:obj:`str` ]: "fasm_mux" features
         """
         return tuple()
 
-    def fasm_prefix_for_intrablock_module(self, hierarchical_instance):
-        """Get the "fasm_prefix" string for a hierarchical cluster/primitive instance ``hierarchical_instance``.
+    def fasm_prefix_for_intrablock_module(self, instance):
+        """Get the "fasm_prefix" string for a hierarchical cluster/primitive ``instance``.
 
         Args:
-            hierarchical_instance (:obj:`Sequence` [`AbstractInstance` ]): Hierarchical instance in bottom-up order in
-                a block
+            instance (`AbstractInstance`): Hierarchical instance in the logic/io block
 
         Returns:
             :obj:`str`: "fasm_prefix" for the module
         """
         return ''
 
-    def fasm_features_for_mode(self, hierarchical_instance, mode):
-        """Get the "fasm_features" string for multimode instance ``hierarchical_instance`` when it's configured to
-        ``mode``.
+    def fasm_features_for_mode(self, instance, mode):
+        """Get the "fasm_features" string for hierarchical multimode ``instance`` when it's configured to ``mode``.
 
         Args:
-            hierarchical_instance (:obj:`Sequence` [`AbstractInstance` ]): Hierarchical multimode instance in
-                bottom-up order in a block
+            instance (`AbstractInstance`): Hierarchical multimode instance in the logic/io block
             mode (:obj:`str`):
         
         Returns:
@@ -64,50 +68,48 @@ class FASMDelegate(Object):
         """
         return tuple()
 
-    def fasm_params_for_primitive(self, hierarchical_instance):
-        """Get the "fasm_params" strings for primitive instance ``hierarchical_instance``.
+    def fasm_params_for_primitive(self, instance):
+        """Get the "fasm_params" strings for hierarchical primitive ``instance``.
 
         Args:
-            hierarchical_instance (:obj:`Sequence` [`AbstractInstance` ]): Hierarchical instance in bottom-up order in
-                a block
+            instance (`AbstractInstance`): Hierarchical instance in the logic/io block
 
         Returns:
             :obj:`Mapping` [:obj:`str`, :obj:`str` ]: "fasm_param" feature mapping for the primitive instance
         """
         return {}
 
-    def fasm_lut(self, hierarchical_instance):
-        """Get the "fasm_lut" string for LUT instance ``hierarchical_instance``.
+    def fasm_lut(self, instance):
+        """Get the "fasm_lut" string for hierarchical LUT instance ``instance``.
 
         Args:
-            hierarchical_instance (:obj:`Sequence` [`AbstractInstance` ]): Hierarchical instance in bottom-up order in
-                a block
+            instance (`AbstractInstance`): Hierarchical instance in the logic/io block
 
         Returns:
             :obj:`str`: "fasm_lut" feature for the LUT instance
         """
         return ''
     
-    def fasm_prefix_for_tile(self, hierarchical_instance):
-        """Get the "fasm_prefix" strings for the block instances in tile instance ``hierarchical_instance``.
+    def fasm_prefix_for_tile(self, instance):
+        """Get the "fasm_prefix" strings for hierarchical block ``instance``. If the block instance is
+        one of a few IO block instances, the fasm prefixes for all its siblings are returned together.
 
         Args:
-            hierarchical_instance (:obj:`Sequence` [`AbstractInstance` ]): Hierarchical instance in bottom-up order in
-                the top-level array
+            instance (`AbstractInstance`): Hierarchical logic/io block instance in the top-level array
 
         Returns:
             :obj:`Sequence` [:obj:`str` ]: "fasm_prefix" for the block instances
         """
         return tuple()
 
-    def fasm_features_for_routing_switch(self, switch_input):
-        """Get the "fasm_features" strings for selecting ``switch_input``.
+    def fasm_features_for_routing_switch(self, source, sink, instance):
+        """Get the "fasm_features" strings for connecting routing box ports ``source`` and ``sink`` in hierarchical
+        routing box ``instance``.
 
         Args:
-            switch_input (`AbstractGenericNet`): Hierarchical switch input bit
-        
-        Returns:
-            :obj:`Sequence` [:obj:`str` ]: "fasm_features" features
+            source (`AbstractGenericNet`): Source bit
+            sink (`AbstractGenericNet`): Sink bit
+            instance (`AbstractInstance`): Hierarchical routing box instance in the top-level array
         """
         return tuple()
 
@@ -117,11 +119,12 @@ class FASMDelegate(Object):
 class VPRInputsGeneration(Object, AbstractPass):
     """Generate XML input files for VPR."""
 
-    __slots__ = ['output_dir', 'xml', 'active_blocks', 'active_primitives', 'block2id', 'blockpin2ptc',
-            'sgmt2id', 'sgmt2ptc', 'sgmt2node_id', 'sgmt2node_id_truncated', 'chanx_id', 'chany_id',
-            'srcsink_id', 'blockpin_id']
-    def __init__(self, output_dir = "."):
+    __slots__ = ['output_dir', 'xml', 'active_blocks', 'active_primitives', 'ios', 'lut_sizes',
+            'block2id', 'blockpin2ptc', 'sgmt2id', 'sgmt2ptc', 'sgmt2node_id', 'sgmt2node_id_truncated',
+            'chanx_id', 'chany_id', 'srcsink_id', 'blockpin_id', 'delegate', 'no_fasm', 'directs']
+    def __init__(self, output_dir = ".", *, no_fasm = False):
         self.output_dir = output_dir
+        self.no_fasm = no_fasm
 
     @classmethod
     def _iob_orientation(cls, blk_inst):
@@ -203,7 +206,7 @@ class VPRInputsGeneration(Object, AbstractPass):
             return chanpos, node.orientation.dimension, node.orientation.direction, node.prototype.length - section
         else:                                       # block pin
             ori = None
-            if bus.hierarchy[0].model.module_class.is_io_block:
+            if bus.hierarchy.model.module_class.is_io_block:
                 ori = cls._iob_orientation(bus.hierarchy[0]).opposite
             else:
                 ori = bus.model.orientation
@@ -211,27 +214,44 @@ class VPRInputsGeneration(Object, AbstractPass):
                     ori.case( (0, 0), (0, 0), (0, -1), (-1, 0) ))
             return chanpos, ori.dimension.perpendicular, None, None
 
-    def _arch_layout_array(self, array, hierarchy = tuple()):
+    def _arch_layout_array(self, array, hierarchy = None, elaborated = set()):
         if array.module_class.is_nonleaf_array:
-            for instance in itervalues(array.instances):
-                self._arch_layout_array(instance.model, (instance, ) + hierarchy)
+            if not hierarchy:
+                ModuleUtils.elaborate(array, True, lambda x: x.model.module_class.is_leaf_array)
+                for instance in itervalues(array.instances):
+                    self._arch_layout_array(instance.model, instance, elaborated)
+            else:
+                for instance in itervalues(array.instances):
+                    self._arch_layout_array(instance.model, hierarchy.delve(instance), elaborated)
         else:
-            position = sum(iter(inst.key for inst in hierarchy), Position(0, 0))
+            if array.key not in elaborated:
+                ModuleUtils.elaborate(array, True, lambda x: x.model.module_class.is_block)
+                elaborated.add(array.key)
+            position = NonLeafArrayBuilder._instance_position(hierarchy)
             for x, y in product(range(array.width), range(array.height)):
                 blk_inst = array.instances.get( ((x, y), Subtile.center) )
                 if blk_inst is None:
                     continue
+                fasm_prefix = '\n'.join(self.delegate.fasm_prefix_for_tile( hierarchy.delve(blk_inst) ))
                 attrs = {'priority': 1, 'x': position.x + x, 'y': position.y + y}
                 if blk_inst.model.module_class.is_io_block:
                     # special process needed for IO blocks
                     # determine the orientation of this IO block
                     ori = self._iob_orientation(blk_inst)
                     self.active_blocks.setdefault(blk_inst.model.key, set()).add(ori)
+                    for iotype in (IOType.ipin, IOType.opin):
+                        if iotype.case('inpad', 'outpad') in blk_inst.model.instances['io'].pins:
+                            for i in range(blk_inst.model.capacity):
+                                self.ios.append( (iotype, Position(position.x + x, position.y + y), i) )
                     attrs['type'] = blk_inst.model.name + '_' + ori.name[0]
                 else:
                     self.active_blocks[blk_inst.model.key] = True
                     attrs['type'] = blk_inst.model.name
-                self.xml.element_leaf('single', attrs)
+                if fasm_prefix:
+                    with self.xml.element('single', attrs), self.xml.element("metadata"):
+                        self.xml.element_leaf("meta", {"name": "fasm_prefix"}, fasm_prefix)
+                else:
+                    self.xml.element_leaf("single", attrs)
 
     def _rrg_grid_array(self, array):
         for x, y in product(range(array.width), range(array.height)):
@@ -254,12 +274,18 @@ class VPRInputsGeneration(Object, AbstractPass):
                     "block_type_id": id_, "x": x, "y": y,
                     "width_offset": x - rootpos.x, "height_offset": y - rootpos.y})
 
-    def _interconnect(self, sink, hierarchy = tuple(), parent_name = None):
+    def _interconnect(self, sink, hierarchy = None, parent_name = None):
         sources = NetUtils.get_multisource(sink)
         if len(sources) == 0:
             return
         type_ = "direct" if len(sources) == 1 else "mux"
         name = [type_]
+        if sink.bus_type.is_slice:
+            if sink.bus.parent.module_class.is_mode:
+                name.append( sink.bus.parent.key )
+        else:
+            if sink.parent.module_class.is_mode:
+                name.append( sink.parent.key )
         if sink.net_type.is_pin:
             if sink.bus_type.is_slice:
                 name.append( sink.bus.hierarchy[0].name )
@@ -274,12 +300,22 @@ class VPRInputsGeneration(Object, AbstractPass):
                 name.append( str(sink.index) )
             else:
                 name.append( sink.name )
+        fasm_muxes = {}
         with self.xml.element(type_, {
             "name": "_".join(name),
             "input": self._net2vpr(sources, parent_name),
             "output": self._net2vpr(sink, parent_name),
             }):
+            sink_vpr = self._net2vpr(sink, parent_name)
             for src in sources:
+                src_vpr = self._net2vpr(src, parent_name)
+                # FASM mux
+                fasm_mux = self.delegate.fasm_mux_for_intrablock_switch(src, sink, hierarchy)
+                if fasm_mux:
+                    fasm_muxes[src_vpr] = ", ".join(fasm_mux)
+                elif len(sources) > 1:
+                    fasm_muxes[src_vpr] = 'ignored'
+                # pack pattern
                 conn = NetUtils.get_connection(src, sink)
                 if conn is None:
                     continue
@@ -290,9 +326,44 @@ class VPRInputsGeneration(Object, AbstractPass):
                         "in_port": self._net2vpr(src, parent_name),
                         "out_port": self._net2vpr(sink, parent_name),
                         })
+            if fasm_muxes:
+                with self.xml.element("metadata"):
+                    self.xml.element_leaf("meta", {"name": "fasm_mux"},
+                            '\n'.join('{} : {}'.format(src, features) for src, features in iteritems(fasm_muxes)))
 
-    def _leaf_pb_type(self, hierarchical_instance):
-        instance = hierarchical_instance[0]
+    def _arch_primitive(self, primitive):
+        with self.xml.element("model", {"name": primitive.name}):
+            combinational_sinks_map = {}
+            with self.xml.element("output_ports"):
+                for port in itervalues(primitive.ports):
+                    if port.direction.is_input:
+                        continue
+                    attrs = {"name": port.name}
+                    if port.is_clock:
+                        attrs["is_clock"] = "1"
+                    elif port.clock is not None:
+                        attrs["clock"] = port.clock
+                    self.xml.element_leaf("port", attrs)
+                    for bit in port:
+                        for source in NetUtils.get_multisource(bit):
+                            source = source.bus if source.bus_type.is_slice else source
+                            combinational_sinks_map.setdefault(source.name, set()).add(port.name)
+            with self.xml.element("input_ports"):
+                for port in itervalues(primitive.ports):
+                    if port.direction.is_output:
+                        continue
+                    attrs = {"name": port.name}
+                    if port.is_clock:
+                        attrs["is_clock"] = "1"
+                    elif port.clock is not None:
+                        attrs["clock"] = port.clock
+                    sinks = combinational_sinks_map.get(port.name, None)
+                    if sinks:
+                        attrs["combinational_sink_ports"] = " ".join(sinks)
+                    self.xml.element_leaf("port", attrs)
+
+    def _leaf_pb_type(self, hierarchy):
+        instance = hierarchy[0]
         primitive = instance.model
         if primitive.primitive_class.is_iopad:
             with self.xml.element("pb_type", {"name": instance.name, "num_pb": 1}):
@@ -307,6 +378,10 @@ class VPRInputsGeneration(Object, AbstractPass):
                         'input': 'inpad.inpad', 'output': '{}.inpad'.format(instance.name)}):
                         self.xml.element_leaf('delay_constant', {'max': '1e-11',
                             'in_port': 'inpad.inpad', 'out_port': '{}.inpad'.format(instance.name)})
+                    fasm_features = '\n'.join(self.delegate.fasm_features_for_mode(hierarchy, "inpad"))
+                    if fasm_features:
+                        with self.xml.element("metadata"):
+                            self.xml.element_leaf('meta', {'name': 'fasm_features'}, fasm_features)
                 # mode: outpad
                 with self.xml.element('mode', {'name': 'outpad'}):
                     with self.xml.element('pb_type', {'name': 'outpad', 'blif_model': '.output', 'num_pb': '1'}):
@@ -315,9 +390,27 @@ class VPRInputsGeneration(Object, AbstractPass):
                         'output': 'outpad.outpad', 'input': '{}.outpad'.format(instance.name)}):
                         self.xml.element_leaf('delay_constant', {'max': '1e-11',
                             'out_port': 'outpad.outpad', 'in_port': '{}.outpad'.format(instance.name)})
-                return
+                    fasm_features = '\n'.join(self.delegate.fasm_features_for_mode(hierarchy, "outpad"))
+                    if fasm_features:
+                        with self.xml.element("metadata"):
+                            self.xml.element_leaf('meta', {'name': 'fasm_features'}, fasm_features)
+            return
+        elif primitive.primitive_class.is_multimode:
+            with self.xml.element("pb_type", {"name": instance.name, "num_pb": 1}):
+                # 1. emit ports:
+                for port in itervalues(primitive.ports):
+                    attrs = {'name': port.name, 'num_pins': len(port)}
+                    self.xml.element_leaf(
+                            'clock' if port.is_clock else port.direction.case('input', 'output'),
+                            attrs)
+                # 2. enumerate modes
+                for mode_name, mode in iteritems(primitive.modes):
+                    with self.xml.element("mode", {"name": mode_name}):
+                        self._pb_type_body(mode, hierarchy)
+            return
         attrs = {'name': instance.name, 'num_pb': '1'}
         if primitive.primitive_class.is_lut:
+            self.lut_sizes.add( len(primitive.ports['in']) )
             attrs.update({"blif_model": ".names", "class": "lut"})
         elif primitive.primitive_class.is_flipflop:
             attrs.update({"blif_model": ".latch", "class": "flipflop"})
@@ -368,8 +461,61 @@ class VPRInputsGeneration(Object, AbstractPass):
                                 'in_port': self._net2vpr(NetUtils.get_multisource(sink), instance.name),
                                 'out_port': self._net2vpr(sink, instance.name),
                                 })
+            # 3. FASM parameters
+            fasm_params = self.delegate.fasm_params_for_primitive(hierarchy)
+            if fasm_params:
+                with self.xml.element('metadata'):
+                    self.xml.element_leaf("meta", {"name": "fasm_params"},
+                        '\n'.join("{} = {}".format(config, param) for param, config in iteritems(fasm_params)))
 
-    def _pb_type(self, module, hierarchy = tuple()):
+    def _pb_type_body(self, module, hierarchy = None):
+        parent_name = hierarchy[0].name if hierarchy else module.name
+        # 1. emit cluster/primitive instances
+        fasm_luts = {}
+        for instance in itervalues(module.instances):
+            hierarchical_instance = (hierarchy.delve(instance, no_check = module.module_class.is_mode)
+                    if hierarchy else instance)
+            if instance.model.module_class.is_cluster:
+                self._pb_type(instance.model, hierarchical_instance)
+            elif instance.model.module_class.is_primitive:
+                self._leaf_pb_type(hierarchical_instance)
+                if instance.model.primitive_class.is_lut:
+                    fasm_lut = self.delegate.fasm_lut(hierarchical_instance)
+                    if fasm_lut:
+                        fasm_luts[instance.name] = fasm_lut
+                    else:
+                        fasm_luts[instance.name] = 'ignored[{}:0]'.format(2 ** len(instance.pins['in']) - 1)
+        # 2. emit interconnect
+        with self.xml.element('interconnect'):
+            for net in chain(itervalues(module.ports),
+                    iter(pin for inst in itervalues(module.instances) for pin in itervalues(inst.pins))):
+                if not net.is_sink:
+                    continue
+                for sink in net:
+                    self._interconnect(sink, hierarchy, parent_name)
+        # 3. FASM metadata
+        fasm_features = ''
+        if module.module_class.is_mode:
+            fasm_features = '\n'.join(self.delegate.fasm_features_for_mode(hierarchy, module.key))
+        fasm_prefix = self.delegate.fasm_prefix_for_intrablock_module(hierarchy)
+        if not (fasm_features or fasm_prefix or fasm_luts):
+            return
+        with self.xml.element("metadata"):
+            if fasm_features:
+                self.xml.element_leaf('meta', {'name': 'fasm_features'}, fasm_features)
+            if fasm_prefix:
+                self.xml.element_leaf('meta', {'name': 'fasm_prefix'}, fasm_prefix)
+            if len(fasm_luts) > 1:
+                self.xml.element_leaf('meta', {'name': 'fasm_type'}, 'SPLIT_LUT')
+                self.xml.element_leaf('meta', {'name': 'fasm_lut'},
+                        '\n'.join('{} = {}[0]'.format(lut, name) for name, lut in iteritems(fasm_luts)))
+            elif len(fasm_luts) == 1:
+                name, lut = next(iter(iteritems(fasm_luts)))
+                self.xml.element_leaf('meta', {'name': 'fasm_type'}, 'LUT')
+                self.xml.element_leaf('meta', {'name': 'fasm_lut'},
+                        '{} = {}'.format(lut, name))
+
+    def _pb_type(self, module, hierarchy = None):
         parent_name = hierarchy[0].name if hierarchy else module.name
         attrs = {"name": parent_name}
         if hierarchy:
@@ -383,20 +529,8 @@ class VPRInputsGeneration(Object, AbstractPass):
                 self.xml.element_leaf(
                         'clock' if port.is_clock else port.direction.case('input', 'output'),
                         attrs)
-            # 2. emit cluster/primitive instances
-            for instance in itervalues(module.instances):
-                if instance.model.module_class.is_cluster:
-                    self._pb_type(instance.model, (instance, ) + hierarchy)
-                elif instance.model.module_class.is_primitive:
-                    self._leaf_pb_type((instance, ) + hierarchy)
-            # 3. emit interconnect
-            with self.xml.element('interconnect'):
-                for net in chain(itervalues(module.ports),
-                        iter(pin for inst in itervalues(module.instances) for pin in itervalues(inst.pins))):
-                    if not net.is_sink:
-                        continue
-                    for sink in net:
-                        self._interconnect(sink, hierarchy, parent_name)
+            # 2. emit pb_type body
+            self._pb_type_body(module, hierarchy)
 
     def _arch_tile(self, block, ori = None):
         tile_name = block.name if ori is None else '{}_{}'.format(block.name, ori.name[0])
@@ -414,7 +548,20 @@ class VPRInputsGeneration(Object, AbstractPass):
                         'clock' if port.is_clock else port.direction.case('input', 'output'),
                         attrs)
             # 2. FC
-            self.xml.element_leaf("fc", {"in_type": "frac", "in_val": "1.0", "out_type": "frac", "out_val": "1.0"})
+            zero_overrides = set()
+            for d in self.directs:
+                for port in (d.source, d.sink):
+                    if port.parent is block:
+                        zero_overrides.add( port.key )
+            if zero_overrides:
+                with self.xml.element("fc",
+                        {"in_type": "frac", "in_val": "1.0", "out_type": "frac", "out_val": "1.0"}):
+                    for port in zero_overrides:
+                        self.xml.element_leaf("fc_override",
+                                {"fc_type": "frac", "fc_val": 0., "port_name": port})
+            else:
+                self.xml.element_leaf("fc",
+                        {"in_type": "frac", "in_val": "1.0", "out_type": "frac", "out_val": "1.0"})
             # 3. pinlocations
             with self.xml.element("pinlocations", {"pattern": "custom"}):
                 for x, y, orientation in product(
@@ -489,6 +636,17 @@ class VPRInputsGeneration(Object, AbstractPass):
             self.xml.element_leaf('mux', {'name': 'default'})
             self.xml.element_leaf('sb', {'type': 'pattern'}, ' '.join(iter('1' for i in range(segment.length + 1))))
             self.xml.element_leaf('cb', {'type': 'pattern'}, ' '.join(iter('1' for i in range(segment.length))))
+
+    def _arch_direct(self, tunnel):
+        vpr_offset = tunnel.source.position - tunnel.sink.position - tunnel.offset
+        self.xml.element_leaf("direct", {
+            "name": tunnel.name,
+            "from_pin": "{}.{}".format(tunnel.source.parent.name, tunnel.source.name),
+            "to_pin": "{}.{}".format(tunnel.sink.parent.name, tunnel.sink.name),
+            "x_offset": vpr_offset.x,
+            "y_offset": vpr_offset.y,
+            "z_offset": 0,
+            })
 
     def _rrg_segment(self, segment, id_):
         with self.xml.element('segment', {'name': segment.name, 'id': id_}):
@@ -566,66 +724,98 @@ class VPRInputsGeneration(Object, AbstractPass):
                 node.orientation.direction.case(0, 1))
 
     def _rrg_edges(self, sink, sink_node, sinkpos, sinkdim, sinkdir, sinkspan):
-        stack = [sink]
-        while stack:
-            cur = stack.pop()
-            # find the previous net
-            for prev in NetUtils.get_hierarchical_multisource(cur):
-                assert not prev.net_type.is_unconnected
-                if not prev.net_type.is_pin:
-                    continue
-                prev_bus, prev_index = (prev.bus, prev.index) if prev.bus_type.is_slice else (prev, 0)
-                node = prev_bus.model.key
-                if isinstance(node, SegmentID) and node.segment_type.is_sboxout:
-                    srcpos, srcdim, srcdir, srcspan = self._analyze_routable_pin(prev)
-                    srcori = Orientation.compose(srcdim, srcdir)
-                    diff = sinkpos - srcpos
-                    if sinkdir is None:    # track to block pin
-                        # 1. same dimension
-                        if not (srcdim is sinkdim and srcdim.case(diff.y, diff.x) == 0):
+        sink_conngraph_node = NetUtils._reference(sink)
+        def yield_or_stop(m, n):
+            idx, net_key = n
+            if isinstance(idx, NetType):
+                return False
+            elif isinstance(net_key[0], SegmentID):
+                return net_key[0].segment_type.is_sboxout
+            elif isinstance(net_key[0], BlockPinID):
+                return False
+            else:
+                return True
+        def skip(m, n):
+            idx, net_key = n
+            if isinstance(net_key[0], SegmentID) or isinstance(net_key[0], BlockPinID):
+                return not m.hierarchy[net_key[1:]].model.module_class.is_routing_box
+            return False
+        for path in NetUtils._navigate_backwards(sink.parent, sink_conngraph_node,
+                yield_ = yield_or_stop, stop = yield_or_stop, skip = skip):
+            src = NetUtils._dereference(sink.parent, path[0])
+            srcpos, srcdim, srcdir, srcspan = self._analyze_routable_pin(src)
+            src_bus, src_index = (src.bus, src.index) if src.bus_type.is_slice else (src, 0)
+            src_node = None
+            if isinstance(src_bus.model.key, SegmentID):
+                srcori = Orientation.compose(srcdim, srcdir)
+                diff = sinkpos - srcpos
+                if sinkdir is None:    # track to block pin
+                    # 1. same dimension
+                    if not (srcdim is sinkdim and srcdim.case(diff.y, diff.x) == 0):
+                        continue
+                    # 2. within reach
+                    elif not (0 <= srcori.case(diff.y, diff.x, -diff.y, -diff.x) < srcspan):
+                        continue
+                else:               # track to track
+                    # 1. if in the same dimension
+                    if srcdim is sinkdim:
+                        # 1.1 same direction
+                        if not (srcdir is sinkdir and srcdim.case(diff.y, diff.x) == 0):
                             continue
-                        # 2. within reach
-                        elif not (0 <= srcori.case(diff.y, diff.x, -diff.y, -diff.x) < srcspan):
+                        # 1.2 within reach
+                        elif not (0 < srcori.case(diff.y, diff.x, -diff.y, -diff.x) <= srcspan):
                             continue
-                    else:               # track to track
-                        # 1. if in the same dimension
-                        if srcdim is sinkdim:
-                            # 1.1 same direction
-                            if not (srcdir is sinkdir and srcdim.case(diff.y, diff.x) == 0):
-                                continue
-                            # 1.2 within reach
-                            elif not (0 < srcori.case(diff.y, diff.x, -diff.y, -diff.x) <= srcspan):
-                                continue
-                        # 2. if in perpendicular dimensions
-                        else:
-                            if not srcori.case(
-                                    diff.x == sinkdir.case(1, 0) and 0 <= diff.y < srcspan,
-                                    diff.y == sinkdir.case(1, 0) and 0 <= diff.x < srcspan,
-                                    diff.x == sinkdir.case(1, 0) and 0 < -diff.y <= srcspan,
-                                    diff.y == sinkdir.case(1, 0) and 0 < -diff.x <= srcspan,
-                                    ):
-                                continue
-                    self.xml.element_leaf("edge", {
-                        "src_node": self._calc_track_id(prev),
-                        "sink_node": sink_node,
-                        "switch_id": 1})
-                elif prev_bus.hierarchy[0].model.module_class.is_block:
-                    if sinkdir is not None:        #  track to block pin
-                        srcpos, srcdim, _0, _1 = self._analyze_routable_pin(prev)
-                        sinkori = Orientation.compose(sinkdim, sinkdir)
-                        diff = srcpos - sinkpos
-                        # 1. same dimension
-                        if not (srcdim is sinkdim and srcdim.case(diff.y, diff.x) == 0):
+                    # 2. if in perpendicular dimensions
+                    else:
+                        if not srcori.case(
+                                diff.x == sinkdir.case(1, 0) and 0 <= diff.y < srcspan,
+                                diff.y == sinkdir.case(1, 0) and 0 <= diff.x < srcspan,
+                                diff.x == sinkdir.case(1, 0) and 0 < -diff.y <= srcspan,
+                                diff.y == sinkdir.case(1, 0) and 0 < -diff.x <= srcspan,
+                                ):
                             continue
-                        # 2. within reach
-                        elif not 0 <= sinkori.case(diff.y, diff.x, -diff.y, -diff.x) < sinkspan:
-                            continue
-                    self.xml.element_leaf("edge", {
-                        "src_node": self._calc_blockpin_id(prev),
-                        "sink_node": sink_node,
-                        "switch_id": 1})
+                    # 3. append to path
+                    path = path + (sink_conngraph_node, )
+                src_node = self._calc_track_id(src)
+            else:
+                if sinkdir is not None:     # block pin to track
+                    sinkori = Orientation.compose(sinkdim, sinkdir)
+                    diff = srcpos - sinkpos
+                    # 1. same dimension
+                    if not (srcdim is sinkdim and srcdim.case(diff.y, diff.x) == 0):
+                        continue
+                    # 2. within reach
+                    elif not 0 <= sinkori.case(diff.y, diff.x, -diff.y, -diff.x) < sinkspan:
+                        continue
+                    # 3. append to path
+                    path = path + (sink_conngraph_node, )
+                src_node = self._calc_blockpin_id(src)
+            attrs = { "src_node": src_node, "sink_node": sink_node, "switch_id": 1}
+            # pair nodes
+            assert len(path) % 2 == 1
+            fasm_features = []
+            for i in range(1, len(path), 2):
+                box_input, box_output = map(lambda x: NetUtils._dereference(sink.parent, x),
+                        (path[i], path[i + 1]))
+                hierarchy = None
+                if box_input.bus_type.is_slice:
+                    hierarchy = box_input.bus.hierarchy
+                    box_input = box_input.bus.model[box_input.index]
                 else:
-                    stack.append(prev)
+                    hierarchy = box_input.hierarchy
+                    box_input = box_input.model
+                if box_output.bus_type.is_slice:
+                    box_output = box_output.bus.model[box_output.index]
+                else:
+                    box_output = box_output.model
+                fasm_features.extend(self.delegate.fasm_features_for_routing_switch(
+                    box_input, box_output, hierarchy))
+            if fasm_features:
+                with self.xml.element("edge", attrs), self.xml.element("metadata"):
+                    self.xml.element_leaf("meta", {"name": "fasm_features"},
+                            "\n".join(fasm_features))
+            else:
+                self.xml.element_leaf("edge", attrs)
 
     @property
     def key(self):
@@ -636,12 +826,25 @@ class VPRInputsGeneration(Object, AbstractPass):
         return True
 
     def run(self, context):
-        makedirs(os.path.abspath(self.output_dir))
-        arch_f = os.path.join(os.path.abspath(self.output_dir), "arch.vpr.xml")
-        rrg_f = os.path.join(os.path.abspath(self.output_dir), "rrg.vpr.xml")
+        # update summary
+        context.summary.vpr_dir = os.path.abspath(self.output_dir)
+        context.summary.vpr_array_width = context.top.width
+        context.summary.vpr_array_height = context.top.height
+        self.ios = context.summary.ios = []
+        self.active_blocks = context.summary.active_blocks =  {}
+        self.active_primitives = context.summary.active_primitives = set()
+        self.lut_sizes = context.summary.lut_sizes = set()
+        # prepare output files
+        makedirs(context.summary.vpr_dir)
+        arch_f = os.path.join(context.summary.vpr_dir, "arch.vpr.xml")
+        rrg_f = os.path.join(context.summary.vpr_dir, "rrg.vpr.xml")
+        if self.no_fasm:
+            self.delegate = FASMDelegate()
+        else:
+            self.delegate = context.fasm_delegate
+        self.delegate.reset()
+        self.directs = tuple(itervalues(context.tunnels))
         # runtime-generated data
-        self.active_blocks = {}
-        self.active_primitives = set()
         self.block2id = OrderedDict()
         self.blockpin2ptc = {}
         # architecture XML generation
@@ -660,8 +863,8 @@ class VPRInputsGeneration(Object, AbstractPass):
                             self.block2id[block_key, ori] = len(self.block2id) + 1
                             self._arch_tile(block, ori)
                     else:
-                        self._arch_tile(block)
                         self.block2id[block_key, None] = len(self.block2id) + 1
+                        self._arch_tile(block)
             # complex blocks
             with xml.element("complexblocklist"):
                 for block_key in self.active_blocks:
@@ -669,7 +872,7 @@ class VPRInputsGeneration(Object, AbstractPass):
             # models
             with xml.element("models"):
                 for model_key in self.active_primitives:
-                    pass
+                    self._arch_primitive(context.database[ModuleView.user, model_key])
             # device: fake
             with xml.element('device'):
                 xml.element_leaf('sizing', {'R_minW_nmos': '0.0', 'R_minW_pmos': '0.0'})
@@ -697,6 +900,11 @@ class VPRInputsGeneration(Object, AbstractPass):
             with xml.element("segmentlist"):
                 for segment in itervalues(context.segments):
                     self._arch_segment(segment)
+            # directs:
+            if context.tunnels:
+                with xml.element("directlist"):
+                    for tunnel in itervalues(context.tunnels):
+                        self._arch_direct(tunnel)
             # clean up
             del self.xml
         # runtime-generated data
@@ -727,7 +935,8 @@ class VPRInputsGeneration(Object, AbstractPass):
                 elif y < starty:
                     starty = y
         # total number of nodes
-        channel_width = 2 * sum(sgmt.width * sgmt.length for sgmt in itervalues(context.segments))
+        channel_width = context.summary.vpr_channel_width = 2 * sum(sgmt.width * sgmt.length
+                for sgmt in itervalues(context.segments))
         total_num_nodes = 0
         # VPR nodes: SOURCE & SINK
         self.srcsink_id = [[None for _ in range(context.top.height)] for _ in range(context.top.width)]
@@ -796,7 +1005,8 @@ class VPRInputsGeneration(Object, AbstractPass):
                                 port = block.ports[key]
                                 for i in range(len(port)):
                                     self._rrg_node(port.direction.case("SINK", "SOURCE"), total_num_nodes,
-                                            ptc_base + ptc + i, x + port.position.x, y + port.position.y)
+                                            ptc_base + ptc + i, x, y,
+                                            xhigh = x + block.width - 1, yhigh = y + block.height - 1)
                                     total_num_nodes += 1
                         self.blockpin_id[x][y] = total_num_nodes
                         for subblock in range(block.capacity):
@@ -845,7 +1055,7 @@ class VPRInputsGeneration(Object, AbstractPass):
                     inst = NonLeafArrayBuilder._get_hierarchical_root(context.top, pos, Subtile.center)
                     if inst is not None and pos == self._calc_hierarchical_position(inst):
                         # this is a block instance
-                        block = inst[0].model
+                        block = inst.model
                         pin2ptc = self.blockpin2ptc[block.key]
                         for subblock in range(block.capacity):
                             inst = NonLeafArrayBuilder._get_hierarchical_root(context.top, pos, subblock)
@@ -855,27 +1065,27 @@ class VPRInputsGeneration(Object, AbstractPass):
                                 port = block.ports[key]
                                 channel = pos + port.position + port.orientation.case(
                                         (0, 0), (0, 0), (0, -1), (-1, 0))
-                                pin = Pin(port, inst)
+                                pin = port._to_pin( inst )
                                 for bit in pin:
                                     xml.element_leaf('edge', {
                                         'src_node': self._calc_blockpin_id(bit, port.direction.is_output, pos),
                                         'sink_node': self._calc_blockpin_id(bit, port.direction.is_input, pos),
                                         'switch_id': 0,
                                         })
-                                if port.direction.is_input:
+                                if port.direction.is_input and not hasattr(port, 'global_'):
                                     args = self._analyze_routable_pin(pin)
                                     for bit in pin:
                                         self._rrg_edges(bit, self._calc_blockpin_id(bit, False, pos), *args)
                     # segments
                     for corner in Corner:
                         inst = NonLeafArrayBuilder._get_hierarchical_root(context.top, pos, corner.to_subtile())
-                        if inst is None or not inst[0].model.module_class.is_switch_box:
+                        if inst is None or not inst.model.module_class.is_switch_box:
                             continue
-                        for node, port in iteritems(inst[0].model.ports):
+                        for node, port in iteritems(inst.model.ports):
                             if not node.segment_type.is_sboxout:
                                 continue
-                            pin = Pin(port, inst)
+                            pin = port._to_pin( inst )
                             args = self._analyze_routable_pin(pin)
-                            for bit in Pin(port, inst):
+                            for bit in pin:
                                 self._rrg_edges(bit, self._calc_track_id(bit), *args)
             del self.xml

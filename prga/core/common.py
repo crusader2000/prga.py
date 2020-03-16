@@ -13,8 +13,8 @@ from math import ceil
 
 __all__ = ['Dimension', 'Direction', 'Orientation', 'OrientationTuple', 'Corner', 'Subtile', 'Position',
         'NetClass', 'IOType', 'ModuleClass', 'PrimitiveClass', 'PrimitivePortClass', 'ModuleView',
-        'Global', 'Segment', 'SegmentType', 'SegmentID', 'BlockPinID',
-        'BlockPortFCValue', 'BlockFCValue']
+        'Global', 'Segment', 'DirectTunnel', 'SegmentType', 'SegmentID', 'BlockPinID',
+        'BlockPortFCValue', 'BlockFCValue', 'SwitchBoxPattern']
 
 # ----------------------------------------------------------------------------
 # -- Dimension ---------------------------------------------------------------
@@ -133,7 +133,7 @@ class Orientation(Enum):
 # ----------------------------------------------------------------------------
 class OrientationTuple(namedtuple('OrientationTuple', 'north east south west')):
 
-    def __new__(cls, default = False, *, north = None, east = None, south = None, west = None):
+    def __new__(cls, default = False, north = None, east = None, south = None, west = None):
         return super(OrientationTuple, cls).__new__(cls,
                 north = north if north is not None else default,
                 south = south if south is not None else default,
@@ -443,6 +443,24 @@ class Global(Object):
         self._bound_to_subblock = subblock
 
 # ----------------------------------------------------------------------------
+# -- Direct Inter-block Tunnel -----------------------------------------------
+# ----------------------------------------------------------------------------
+class DirectTunnel(namedtuple("DirectTunnel", "name source sink offset")):
+    """Direct inter-block tunnels.
+
+    Args:
+        name (:obj:`str`): Name of the inter-block tunnel
+        source (`Port`): Source of the tunnel. Must be a logic block output port
+        sink (`Port`): Sink of the tunnel. Must be a logic block input port
+        offset (`Position`): Position of the source port relative to the sink port
+            This definition is the opposite of how VPR defines a ``direct`` tag. In addition, ``offset`` is
+            defined based on the position of the ports, not the blocks
+    """
+
+    def __new__(cls, name, source, sink, offset):
+        return super(DirectTunnel, cls).__new__(cls, name, source, sink, Position(*offset))
+
+# ----------------------------------------------------------------------------
 # -- Segment -----------------------------------------------------------------
 # ----------------------------------------------------------------------------
 class Segment(namedtuple('Segment', 'name width length')):
@@ -671,3 +689,13 @@ class BlockFCValue(namedtuple('BlockFCValue', 'default_in default_out overrides'
         """
         return self.overrides.get(port.name, port.direction.case(self.default_in, self.default_out)).segment_fc(
                 segment, all_sections)
+
+# ----------------------------------------------------------------------------
+# -- Switch Box Pattern ------------------------------------------------------
+# ----------------------------------------------------------------------------
+class SwitchBoxPattern(Enum):
+    """Switch box patterns."""
+
+    wilton          = 0     # standard wilton pattern
+    cycle_free      = 1     # improved cycle-free wilton pattern
+    span_limited    = 2     # the maximum of Hamilton distance reachable from a CLB is limited

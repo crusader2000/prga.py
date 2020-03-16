@@ -6,8 +6,8 @@ from prga.compatible import *
 from .common import NetType, PortDirection, AbstractPort, AbstractPin
 from .const import Unconnected
 from .util import NetUtils
-from ...util import Object, uno
-from ...exception import PRGATypeError
+from ...util import Object, uno, compose_slice
+from ...exception import PRGATypeError, PRGAInternalError
 
 __all__ = ['Port', 'Pin']
 
@@ -51,7 +51,12 @@ class Port(Object, AbstractPort):
 
     # == internal API ========================================================
     def _to_pin(self, hierarchy):
-        return Pin(self, hierarchy)
+        """`Pin`: Convert to a pin in ``hierarchy``.
+
+        Args:
+            hierarchy (`Abstracinstance`):
+        """
+        return hierarchy.pins[self.key]
 
     # == low-level API =======================================================
     @property
@@ -91,7 +96,7 @@ class Port(Object, AbstractPort):
     def __getitem__(self, index):
         if not isinstance(index, int) and not isinstance(index, slice):
             raise PRGATypeError("index", "int or slice")
-        index = NetUtils._slice_intersect(slice(0, len(self)), index)
+        index = compose_slice(slice(0, len(self)), index)
         if index is None:
             return Unconnected(0)
         else:
@@ -105,7 +110,7 @@ class Pin(Object, AbstractPin):
 
     Args:
         model (`Port`): Model of this pin
-        hierarchy (:obj:`Iterable` [`AbstractInstance` ]): Hierarchy of instances down to the pin in ascending order.
+        hierarchy (`AbstractInstance`): Hierarchy of instances down to the pin in bottom-up order.
             See `Pin.hierarchy` for more information
     """
 
@@ -114,12 +119,10 @@ class Pin(Object, AbstractPin):
     # == internal API ========================================================
     def __init__(self, model, hierarchy):
         self._model = model
-        self._hierarchy = tuple(iter(hierarchy))
+        self._hierarchy = hierarchy
 
     def __str__(self):
-        return 'Pin({}/{}/{})'.format(self.parent.name,
-                "/".join(i.name for i in reversed(self._hierarchy)),
-                self._model.name)
+        return 'Pin({}/{}/{})'.format(self.parent.name, self._hierarchy.name, self._model.name)
 
     def __eq__(self, other):
         return isinstance(other, type(self)) and self._model is other._model and self._hierarchy == other._hierarchy
@@ -136,14 +139,23 @@ class Pin(Object, AbstractPin):
     def hierarchy(self):
         return self._hierarchy
 
+    def shrink(self, length):
+        if length == 0:
+            return self.model
+        else:
+            return type(self)(self.model, self._hierarchy[:length])
+
+    def extend(self, hierarchy):
+        return type(self)(self.model, self._hierarchy.extend(hierarchy))
+
     # -- implementing properties/methods required by superclass --------------
     @property
     def name(self):
-        return '{}/{}'.format('/'.join(i.name for i in self._hierarchy), self._model.name)
+        return '{}/{}'.format(self._hierarchy.name, self._model.name)
 
     @property
     def node(self):
-        return self.model.node + tuple(inst.key for inst in self._hierarchy)
+        return self.model.node + self._hierarchy.hierarchical_key
 
     def __len__(self):
         return len(self._model)
@@ -151,7 +163,7 @@ class Pin(Object, AbstractPin):
     def __getitem__(self, index):
         if not isinstance(index, int) and not isinstance(index, slice):
             raise PRGATypeError("index", "int or slice")
-        index = NetUtils._slice_intersect(slice(0, len(self._model)), index)
+        index = compose_slice(slice(0, len(self._model)), index)
         if index is None:
             return Unconnected(0)
         else:
