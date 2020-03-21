@@ -35,7 +35,7 @@ class BackendPinConstraintsGenerator(object):
                 elif minorpos == minorbound - 1:
                     majorpos2 = majorpos
                     if port.direction.is_output:
-                        majorpos2 += key.orientation.port.direction.case(1, -1) * key.prototype.length
+                        majorpos2 += port.direction.case(1, -1) * key.prototype.length
                     if 0 <= majorpos2 < majorbound:
                         ori = Orientation.compose(dim.perpendicular, Direction.inc)
                         offset = max(0, min(majorbound - 1, majorpos))
@@ -62,7 +62,11 @@ class BackendPinConstraintsGenerator(object):
             else:
                 _logger.info("Ignoring non-routing pin: {}".format(port))
                 continue
+            if ori.is_east:
+                offset = module.height - 1 - offset
+            elif ori.is_south:
+                offset = module.width - 1 - offset
             f.write(("set_individual_pin_constraints -ports [get_ports {0}[*]] -side {1} "
-                "-offset {{[expr {2} * $PRGA_TILE_{metric}] [expr {3} * $PRGA_TILE_{metric}]}}\n")
+                "-offset [list [expr {2} * $PRGA_TILE_{metric}] [expr {3} * $PRGA_TILE_{metric}]]\n")
                 .format(port.name, ori.case(2, 3, 4, 1), offset, offset + 1,
                     metric = ori.dimension.case("HEIGHT", "WIDTH")))
