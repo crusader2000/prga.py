@@ -136,9 +136,12 @@ class OrientationTuple(namedtuple('OrientationTuple', 'north east south west')):
     def __new__(cls, default = False, north = None, east = None, south = None, west = None):
         return super(OrientationTuple, cls).__new__(cls,
                 north = north if north is not None else default,
-                south = south if south is not None else default,
                 east = east if east is not None else default,
+                south = south if south is not None else default,
                 west = west if west is not None else default)
+
+    def __getnewargs__(self):
+        return False, self.north, self.east, self.south, self.west
 
 # ----------------------------------------------------------------------------
 # -- Corner ------------------------------------------------------------------
@@ -634,10 +637,12 @@ class BlockPortFCValue(namedtuple('BlockPortFCValue', 'default overrides')):
         multiplier = segment.length if all_sections else 1
         fc = self.overrides.get(segment.name, self.default)
         if isinstance(fc, int):
+            return max(0., min(1., fc / ((segment.width * segment.length) if all_sections else segment.width)))
             if fc < 0 or fc >= segment.width:
                 raise PRGAInternalError("Invalid FC value ({}) for segment '{}'".format(fc, segment.name))
             return fc * multiplier
         elif isinstance(fc, float):
+            return max(0., min(1., fc))
             if fc < 0 or fc > 1:
                 raise PRGAInternalError("Invalid FC value ({}) for segment '{}'".format(fc, segment.name))
             return int(ceil(fc * segment.width * multiplier))
@@ -687,15 +692,77 @@ class BlockFCValue(namedtuple('BlockFCValue', 'default_in default_out overrides'
         Returns:
             :obj:`int`: the calculated FC value
         """
-        return self.overrides.get(port.name, port.direction.case(self.default_in, self.default_out)).segment_fc(
+        return self.overrides.get(port.key, port.direction.case(self.default_in, self.default_out)).segment_fc(
                 segment, all_sections)
 
 # ----------------------------------------------------------------------------
 # -- Switch Box Pattern ------------------------------------------------------
 # ----------------------------------------------------------------------------
-class SwitchBoxPattern(Enum):
+class SwitchBoxPattern(Object):
     """Switch box patterns."""
 
-    wilton          = 0     # standard wilton pattern
-    cycle_free      = 1     # improved cycle-free wilton pattern
-    span_limited    = 2     # the maximum of Hamilton distance reachable from a CLB is limited
+    class _pattern(Object):
+        __slots__ = ["_fill_corners"]
+
+        def __init__(self, fill_corners = Corner):
+            try:
+                self._fill_corners = set(iter(fill_corners))
+            except TypeError:
+                self._fill_corners = {fill_corners}
+
+        def __call__(self, *args, **kwargs):
+            return type(self)(*args, **kwargs)
+
+        def __eq__(self, other):
+            if not isinstance(other, type(self)) or other.fill_corners != self.fill_corners:
+                return False
+            else:
+                for slot in self.__slots__:
+                    if getattr(self, slot) != getattr(other, slot):
+                        return False
+                return True
+
+        def __ne__(self, other):
+            return not self.__eq__(other)
+
+        def __getattr__(self, attr):
+            if attr.startswith("is"):
+                return attr[2:] == type(self).__name__
+            raise AttributeError(attr)
+
+        @property
+        def fill_corners(self):
+            return self._fill_corners
+
+    class _wilton(_pattern):
+        pass
+
+    class _cycle_free(_pattern):
+        pass
+
+    class _span_limited(_pattern):
+        __slots__ = ["_max_span"]
+
+        def __init__(self, fill_corners = Corner, max_span = None):
+            super(SwitchBoxPattern._span_limited, self).__init__(fill_corners)
+            self._max_span = max_span
+
+        @property
+        def max_span(self):
+            return self._max_span
+
+    class _turn_limited(_pattern):
+        __slots__ = ["_max_turn"]
+
+        def __init__(self, fill_corners = Corner, max_turn = None):
+            super(SwitchBoxPattern._turn_limited, self).__init__(fill_corners)
+            self._max_turn = max_turn
+
+        @property
+        def max_turn(self):
+            return self._max_turn
+
+SwitchBoxPattern.wilton = SwitchBoxPattern._wilton()
+SwitchBoxPattern.cycle_free = SwitchBoxPattern._cycle_free()
+SwitchBoxPattern.span_limited = SwitchBoxPattern._span_limited()
+SwitchBoxPattern.turn_limited = SwitchBoxPattern._turn_limited()

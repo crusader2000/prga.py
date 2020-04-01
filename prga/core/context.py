@@ -35,20 +35,16 @@ class ContextSummary(Object):
     """Summary of the FPGA."""
 
     __slots__ = [
-            # numbers
-            'vpr_channel_width',    # VPR channel width. Updated by `VPRInputsGeneration`
-            'vpr_array_width',      # VPR array width. Updated by `VPRInputsGeneration`
-            'vpr_array_height',     # VPR array height. Updated by `VPRInputsGeneration`
-            'ios',                  # list of IOType, (x, y), subblock. Updated by `VPRInputsGeneration`
-            # architecture status
-            'active_blocks',        # dict of block keys to active orientations. Updated by `VPRInputsGeneration`
-            'active_primitives',    # set of primitive keys. Updated by `VPRInputsGeneration`
-            'lut_sizes',            # set of LUT sizes. Updated by `VPRInputsGeneration` 
-            # output files
-            'vpr_dir',              # path to VPR outputs. Updated by `VPRInputsGeneration`
-            'yosys_script',         # generic yosys synthesis script
-            'rtl_sources',          # dict of module keys to verilog source file names. Updated by `VerilogCollection`
-            # additional attributes
+            # generic summaries: updated by 'SummaryUpdate'
+            'ios',                  # list of IOType, (x, y), subblock
+            'active_blocks',        # dict of block keys to active orientations
+            'active_primitives',    # set of primitive keys
+            'lut_sizes',            # set of LUT sizes
+            # pass-specific summaries: updated by each specific run
+            'vpr',                  # updated by VPR-related passes
+            'yosys',                # updated by Yosys-related passes
+            'rtl',                  # updated by RTL-related passes
+            # additional summaries
             '__dict__',
             ]
 
@@ -99,14 +95,12 @@ class Context(Object):
         for i in range(2, 9):
             lut = Module('lut' + str(i),
                     ports = OrderedDict(),
-                    allow_multisource = True,
                     module_class = ModuleClass.primitive,
                     primitive_class = PrimitiveClass.lut)
             in_ = ModuleUtils.create_port(lut, 'in', i, PortDirection.input_,
-                    port_class = PrimitivePortClass.lut_in)
+                    port_class = PrimitivePortClass.lut_in, vpr_combinational_sinks = ("out", ))
             out = ModuleUtils.create_port(lut, 'out', 1, PortDirection.output,
                     port_class = PrimitivePortClass.lut_out)
-            NetUtils.connect(in_, out, fully = True)
             ModuleUtils.elaborate(lut)
             database[ModuleView.user, lut.key] = lut
 
@@ -114,7 +108,6 @@ class Context(Object):
         if True:
             flipflop = Module('flipflop',
                     ports = OrderedDict(),
-                    allow_multisource = True,
                     module_class = ModuleClass.primitive,
                     primitive_class = PrimitiveClass.flipflop)
             ModuleUtils.create_port(flipflop, 'clk', 1, PortDirection.input_,
@@ -130,7 +123,6 @@ class Context(Object):
         for class_ in (PrimitiveClass.inpad, PrimitiveClass.outpad, PrimitiveClass.iopad):
             pad = Module(class_.name,
                     ports = OrderedDict(),
-                    allow_multisource = True,
                     module_class = ModuleClass.primitive,
                     primitive_class = class_)
             if class_ in (PrimitiveClass.inpad, PrimitiveClass.iopad):
@@ -329,7 +321,8 @@ class Context(Object):
     @property
     def io_blocks(self):
         """:obj:`Mapping` [:obj:`str`, `AbstractModule` ]: A mapping from names to IO blocks."""
-        return ReadonlyMappingProxy(self._database, lambda kv: kv[1].module_class.is_io_block)
+        return ReadonlyMappingProxy(self._database, lambda kv: kv[1].module_class.is_io_block,
+                lambda k: (ModuleView.user, k), lambda k: k[1])
 
     def create_io_block(self, name, capacity = 1, *, no_input = False, no_output = False):
         """`IOBlockBuilder`: Create an IO block builder."""
