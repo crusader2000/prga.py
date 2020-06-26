@@ -32,7 +32,7 @@ def simple_test(dut):
     
     # No. of input bits
     # n_input = input()
-    n_input = math.log({{module.cfg_bitcount}},2)
+    n_input = int(math.log({{module.cfg_bitcount}},2))
 
     # Setting up LUT
     # Set the value of cfd
@@ -75,7 +75,7 @@ def changing_config(dut):
     cfg_d = dut.cfg_d
     
     # No. of input bits
-    n_input = math.log({{module.cfg_bitcount}},2)
+    n_input = int(math.log({{module.cfg_bitcount}},2))
 
     # Setting up LUT
     # Set the value of cfd
