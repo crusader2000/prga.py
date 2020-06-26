@@ -29,6 +29,7 @@ class FileRenderer(Object):
         self.template_search_paths = [DEFAULT_TEMPLATE_SEARCH_PATH]
         self.template_search_paths.extend(paths)
         self.tasks = OrderedDict()
+        self.test_tasks = OrderedDict()
         self._yosys_synth_script_task = None
 
     @classmethod
@@ -121,6 +122,43 @@ class FileRenderer(Object):
                 }
         parameters.update(kwargs)
         self.tasks.setdefault(file_, []).append( (template, parameters) )
+
+    def add_makefile(self, module, file_, template = 'test_base.tmpl', **kwargs):
+        """Add a Verilog rendering task.
+
+        Args:
+            module (`Abstractg`): The module to be rendered
+            file_ (:obj:`str` of file-like object): The output file
+            template (:obj:`str`): The template to be used
+            **kwargs: Additional key-value parameters to be passed into the template when rendering
+        """
+        parameters = {
+                "module": module,
+                "source2verilog": self._source2verilog,
+                'itervalues': itervalues,
+                'iteritems': iteritems,
+                }
+        parameters.update(kwargs)
+        self.test_tasks.setdefault(file_, []).append( (template, parameters) )
+
+    def add_python_test(self, module, file_, template = 'test_base.tmpl.py', **kwargs):
+        """Add a Verilog rendering task.
+
+        Args:
+            module (`Abstractg`): The module to be rendered
+            file_ (:obj:`str` of file-like object): The output file
+            template (:obj:`str`): The template to be used
+            **kwargs: Additional key-value parameters to be passed into the template when rendering
+        """
+        parameters = {
+                "module": module,
+                "source2verilog": self._source2verilog,
+                'itervalues': itervalues,
+                'iteritems': iteritems,
+                }
+        parameters.update(kwargs)
+        self.test_tasks.setdefault(file_, []).append( (template, parameters) )
+
 
     def add_generic(self, file_, template, **kwargs):
         """Add a generic file rendering task.
@@ -291,3 +329,17 @@ class FileRenderer(Object):
                 file_ = open(file_, OpenMode.wb)
             for template, parameters in l:
                 env.get_template(template).stream(parameters).dump(file_, encoding="ascii")
+
+    def render_test(self):
+        """Render all added files and clear the task queue."""
+        env = jj.Environment(loader = jj.FileSystemLoader(self.template_search_paths))
+        while self.test_tasks:
+            file_, l = self.test_tasks.popitem()
+            if isinstance(file_, basestring):
+                d = os.path.dirname(file_)
+                if d:
+                    makedirs(d)
+                file_ = open(file_, OpenMode.wb)
+            for template, parameters in l:
+                env.get_template(template).stream(parameters).dump(file_, encoding="ascii")
+

@@ -256,7 +256,9 @@ class Scanchain(object):
                     is_cell = True,
                     module_class = ModuleClass.primitive,
                     cfg_bitcount = 2 ** i,
-                    verilog_template = "lut.tmpl.v")
+                    verilog_template = "lut.tmpl.v",
+                    test_makefile_template = "test_lut.tmpl",
+                    test_python_template = "test_lut.tmpl.py" )
             # user ports
             in_ = ModuleUtils.create_port(lut, 'in', i, PortDirection.input_, net_class = NetClass.primitive)
             out = ModuleUtils.create_port(lut, 'out', 1, PortDirection.output, net_class = NetClass.primitive)
