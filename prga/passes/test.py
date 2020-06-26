@@ -31,21 +31,28 @@ class Tester(Object, AbstractPass):
     def __init__(self, renderer, rtl_dir, src_output_dir = ".", header_output_dir = None, view = ModuleView.logical):
         self.renderer = renderer
         self.src_output_dir = src_output_dir
-        self.rtl_dir = rtl_dir
+        self.rtl_dir = os.path.abspath(rtl_dir)
         self.header_output_dir = os.path.abspath(uno(header_output_dir, os.path.join(src_output_dir, "include")))
         self.view = view
         self.visited = {}
+        print(self.rtl_dir)
 
     def _process_module(self, module):
         if module.key in self.visited:
             return
-        # f = os.path.join(os.path.abspath(self.src_output_dir), "test_" + module.name + ".v")
+        
+        if not path.exists("test_" + module.name):
+            os.mkdir("test_" + module.name)
+
+        f = os.path.join(self.rtl_dir, "test_" + module.name)
+        
         self.visited[module.key] = f
 
         if not hasattr(module, "rtl_dir"):
-            module["rtl_dir"] = self.rtl_dir
+            module["rtl_dir"] = f
         
         if module.module_class == 0 :
+            print(module.module_name)
             # This if condition checks if the module is a primitive
             self.renderer.add_makefile(module, f, getattr(module, "test_makefile_template", "test_base.tmpl"))
             self.renderer.add_python_test(module, f, getattr(module, "test_python_template", "test_base.tmpl.py"))

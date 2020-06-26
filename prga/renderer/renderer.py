@@ -29,7 +29,7 @@ class FileRenderer(Object):
         self.template_search_paths = [DEFAULT_TEMPLATE_SEARCH_PATH]
         self.template_search_paths.extend(paths)
         self.tasks = OrderedDict()
-        self.test_tasks = OrderedDict()
+        # self.test_tasks = OrderedDict()
         self._yosys_synth_script_task = None
 
     @classmethod
