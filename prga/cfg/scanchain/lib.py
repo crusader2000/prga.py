@@ -448,7 +448,10 @@ class Scanchain(object):
             # logical view
             if "fle6" not in dont_add_logical_primitive:
                 fle6 = fle6.create_logical_counterpart(
-                        cfg_bitcount = 69, verilog_template = "fle6.tmpl.v")
+                        cfg_bitcount = 69,
+                        verilog_template = "fle6.tmpl.v",
+                        test_makefile_template = "test_fle6.tmpl",
+                        test_python_template = "test_fle6.tmpl.py")
 
                 # combinational paths
                 fle6.add_timing_arc([fle6.ports["in"], fle6.ports["cin"]], [fle6.ports["out"], fle6.ports["cout"]])

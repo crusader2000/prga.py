@@ -24,12 +24,12 @@ DEFAULT_TEMPLATE_SEARCH_PATH = os.path.join(os.path.dirname(os.path.abspath(__fi
 class FileRenderer(Object):
     """File renderer based on Jinja2."""
 
-    __slots__ = ['template_search_paths', 'tasks', '_yosys_synth_script_task']
+    __slots__ = ['template_search_paths', 'tasks', 'test_tasks','_yosys_synth_script_task']
     def __init__(self, *paths):
         self.template_search_paths = [DEFAULT_TEMPLATE_SEARCH_PATH]
         self.template_search_paths.extend(paths)
         self.tasks = OrderedDict()
-        # self.test_tasks = OrderedDict()
+        self.test_tasks = OrderedDict()
         self._yosys_synth_script_task = None
 
     @classmethod
@@ -121,6 +121,11 @@ class FileRenderer(Object):
                 'iteritems': iteritems,
                 }
         parameters.update(kwargs)
+        # print(module)
+        # print(self._source2verilog)
+        # print(itervalues)
+        # print(iteritems)
+        # print()
         self.tasks.setdefault(file_, []).append( (template, parameters) )
 
     def add_makefile(self, module, file_, template = 'test_base.tmpl', **kwargs):
@@ -158,7 +163,6 @@ class FileRenderer(Object):
                 }
         parameters.update(kwargs)
         self.test_tasks.setdefault(file_, []).append( (template, parameters) )
-
 
     def add_generic(self, file_, template, **kwargs):
         """Add a generic file rendering task.
@@ -341,5 +345,8 @@ class FileRenderer(Object):
                     makedirs(d)
                 file_ = open(file_, OpenMode.wb)
             for template, parameters in l:
+                # print(template)
+                # print(file_)
+                # print()
                 env.get_template(template).stream(parameters).dump(file_, encoding="ascii")
 

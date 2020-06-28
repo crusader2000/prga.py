@@ -3,7 +3,7 @@
 {% set cfg_width = module.ports.cfg_i|length -%}
 `timescale 1ns/1ps
 module {{ module.name }} (
-    input wire [{{ width - 1 }}:0] in,
+    input wire [{{ width - 1 }}:0] bits_in,
     output reg [0:0] out,
 
     input wire [0:0] cfg_clk,
@@ -24,12 +24,12 @@ module {{ module.name }} (
     // synopsys translate_on
 
     always @* begin
-        internal_in = in;
+        internal_in = bits_in;
 
         // synopsys translate_off
         // in simulation, force unconnected LUT input to be zeros
         {%- for i in range(width) %}
-        if (in[{{ i }}] === 1'bx) begin
+        if (bits_in[{{ i }}] === 1'bx) begin
             internal_in[{{ i }}] = 1'b0;
         end
         {%- endfor %}

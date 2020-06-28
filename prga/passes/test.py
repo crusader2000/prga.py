@@ -9,6 +9,7 @@ from ..util import Object, uno
 from ..exception import PRGAInternalError
 
 import os
+from os import path
 
 __all__ = ['Tester']
 
@@ -28,34 +29,43 @@ class Tester(Object, AbstractPass):
     """
 
     __slots__ = ['renderer', 'src_output_dir', 'header_output_dir', 'view', 'visited']
-    def __init__(self, renderer, rtl_dir, src_output_dir = ".", header_output_dir = None, view = ModuleView.logical):
+    def __init__(self, renderer, rtl_dir, tests_dir, src_output_dir = ".", header_output_dir = None, view = ModuleView.logical):
         self.renderer = renderer
         self.src_output_dir = src_output_dir
+        self.tests_dir = os.path.abspath(tests_dir)
         self.rtl_dir = os.path.abspath(rtl_dir)
         self.header_output_dir = os.path.abspath(uno(header_output_dir, os.path.join(src_output_dir, "include")))
         self.view = view
         self.visited = {}
         print(self.rtl_dir)
+        if not path.exists(self.tests_dir):
+            os.mkdir(self.tests_dir)
 
     def _process_module(self, module):
         if module.key in self.visited:
             return
         
-        if not path.exists("test_" + module.name):
-            os.mkdir("test_" + module.name)
-
-        f = os.path.join(self.rtl_dir, "test_" + module.name)
+        f = os.path.join(self.tests_dir, "test_" + module.name)
         
         self.visited[module.key] = f
 
-        if not hasattr(module, "rtl_dir"):
-            module["rtl_dir"] = f
+        if not hasattr(module, "test_dir"):
+            setattr(module,"test_dir",f)
         
+        # This if condition checks if the module is a primitive
         if module.module_class == 0 :
-            print(module.module_name)
-            # This if condition checks if the module is a primitive
-            self.renderer.add_makefile(module, f, getattr(module, "test_makefile_template", "test_base.tmpl"))
-            self.renderer.add_python_test(module, f, getattr(module, "test_python_template", "test_base.tmpl.py"))
+            if not path.exists(path.join(self.tests_dir,"test_" + module.name)):
+                os.mkdir(path.join(self.tests_dir,"test_" + module.name))
+
+            # print(module.name)
+            # print(f)
+            # print(path.join(f,"Makefile"))
+            # print(path.join(f,"test.py"))
+            setattr(module,"verilog_file",path.join(self.rtl_dir,module.name+".v"))
+            # print(module.verilog_file)
+            self.renderer.add_makefile(module, path.join(f,"Makefile"), getattr(module, "test_makefile_template", "test_base.tmpl"))
+            self.renderer.add_python_test(module, path.join(f,"test.py"), getattr(module, "test_python_template", "test_base.tmpl.py"))
+            self.renderer.add_python_test(module, path.join(f,"config.py"), "config.py")
        
         for instance in itervalues(module.instances):
             self._process_module(instance.model)
