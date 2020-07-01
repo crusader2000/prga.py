@@ -450,17 +450,11 @@ class Scanchain(object):
 
             # logical view
             if "fle6" not in dont_add_logical_primitive:
-<<<<<<< HEAD
-                fle6 = fle6.build_logical_counterpart(not_cell = True, allow_multisource = True,
-                        cfg_bitcount = 69, verilog_template = "fle6.tmpl.v")
-                ModuleUtils.instantiate(fle6.module, cls.get_cfg_data_cell(context, 69), "i_cfg_data")
-=======
                 fle6 = fle6.create_logical_counterpart(
                         cfg_bitcount = 69,
                         verilog_template = "fle6.tmpl.v",
                         test_makefile_template = "test_fle6.tmpl",
                         test_python_template = "test_fle6.tmpl.py")
->>>>>>> cfce7e1eba80efb8df45aa8ee97e81fd007233ab
 
                 # combinational paths
                 NetUtils.connect([fle6.ports["in"], fle6.ports["cin"]], [fle6.ports["out"], fle6.ports["cout"]],
