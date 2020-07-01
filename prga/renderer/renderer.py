@@ -12,9 +12,7 @@ from ..exception import PRGAInternalError
 
 import os
 import jinja2 as jj
-
-# In Python 3.7 and above, ``dict`` preserves insertion order and is more performant than ``OrderedDict``
-OrderedDict = dict
+from collections import OrderedDict
 
 __all__ = ['FileRenderer']
 
@@ -26,11 +24,12 @@ DEFAULT_TEMPLATE_SEARCH_PATH = os.path.join(os.path.dirname(os.path.abspath(__fi
 class FileRenderer(Object):
     """File renderer based on Jinja2."""
 
-    __slots__ = ['template_search_paths', 'tasks', '_yosys_synth_script_task']
+    __slots__ = ['template_search_paths', 'tasks', 'test_tasks','_yosys_synth_script_task']
     def __init__(self, *paths):
         self.template_search_paths = [DEFAULT_TEMPLATE_SEARCH_PATH]
         self.template_search_paths.extend(paths)
         self.tasks = OrderedDict()
+        self.test_tasks = OrderedDict()
         self._yosys_synth_script_task = None
 
     @classmethod
@@ -110,7 +109,7 @@ class FileRenderer(Object):
         """Add a Verilog rendering task.
 
         Args:
-            module (`Module`): The module to be rendered
+            module (`Abstractg`): The module to be rendered
             file_ (:obj:`str` of file-like object): The output file
             template (:obj:`str`): The template to be used
             **kwargs: Additional key-value parameters to be passed into the template when rendering
@@ -122,7 +121,48 @@ class FileRenderer(Object):
                 'iteritems': iteritems,
                 }
         parameters.update(kwargs)
+        # print(module)
+        # print(self._source2verilog)
+        # print(itervalues)
+        # print(iteritems)
+        # print()
         self.tasks.setdefault(file_, []).append( (template, parameters) )
+
+    def add_makefile(self, module, file_, template = 'test_base.tmpl', **kwargs):
+        """Add a Verilog rendering task.
+
+        Args:
+            module (`Abstractg`): The module to be rendered
+            file_ (:obj:`str` of file-like object): The output file
+            template (:obj:`str`): The template to be used
+            **kwargs: Additional key-value parameters to be passed into the template when rendering
+        """
+        parameters = {
+                "module": module,
+                "source2verilog": self._source2verilog,
+                'itervalues': itervalues,
+                'iteritems': iteritems,
+                }
+        parameters.update(kwargs)
+        self.test_tasks.setdefault(file_, []).append( (template, parameters) )
+
+    def add_python_test(self, module, file_, template = 'test_base.tmpl.py', **kwargs):
+        """Add a Verilog rendering task.
+
+        Args:
+            module (`Abstractg`): The module to be rendered
+            file_ (:obj:`str` of file-like object): The output file
+            template (:obj:`str`): The template to be used
+            **kwargs: Additional key-value parameters to be passed into the template when rendering
+        """
+        parameters = {
+                "module": module,
+                "source2verilog": self._source2verilog,
+                'itervalues': itervalues,
+                'iteritems': iteritems,
+                }
+        parameters.update(kwargs)
+        self.test_tasks.setdefault(file_, []).append( (template, parameters) )
 
     def add_generic(self, file_, template, **kwargs):
         """Add a generic file rendering task.
@@ -165,7 +205,7 @@ class FileRenderer(Object):
 
         Args:
             file_ (:obj:`str` of file-like object): The output file
-            module (`Module`): The blackbox module
+            module (:obj:`Abstractg`): The blackbox module
 
         Keyword Args:
             template (:obj:`str`): The template to be used
@@ -224,7 +264,7 @@ class FileRenderer(Object):
 
         Args:
             file_ (:obj:`str` of file-like object): The output file
-            module (`Module`): The memory module
+            module (:obj:`Abstractg`): The memory module
             template (:obj:`str`): The template to be used
 
         Keyword Args:
@@ -247,7 +287,7 @@ class FileRenderer(Object):
 
         Args:
             file_ (:obj:`str` or file-like object): The output file
-            module (`Module`): The memory module
+            module (:obj:`Abstractg`): The memory module
 
         Keyword Args:
             template (:obj:`str`): The template to be used
@@ -293,3 +333,21 @@ class FileRenderer(Object):
                 file_ = open(file_, OpenMode.wb)
             for template, parameters in l:
                 env.get_template(template).stream(parameters).dump(file_, encoding="ascii")
+
+    def render_test(self):
+        """Render all added files and clear the task queue."""
+        env = jj.Environment(loader = jj.FileSystemLoader(self.template_search_paths))
+        env.globals.update(NetUtils=NetUtils)
+        while self.test_tasks:
+            file_, l = self.test_tasks.popitem()
+            if isinstance(file_, basestring):
+                d = os.path.dirname(file_)
+                if d:
+                    makedirs(d)
+                file_ = open(file_, OpenMode.wb)
+            for template, parameters in l:
+                # print(template)
+                # print(file_)
+                # print()
+                env.get_template(template).stream(parameters).dump(file_, encoding="ascii")
+
