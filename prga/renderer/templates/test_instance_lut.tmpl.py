@@ -22,16 +22,16 @@ def simple_test(dut):
     clock_generation(dut.cfg_clk)
     clk = dut.cfg_clk
     # Signals
-    input = dut.bits_in
-    out = dut.out
-    cfg_e = dut.cfg_e
-    cfg_we = dut.cfg_we
-    cfg_i = dut.cfg_i
-    cfg_o = dut.cfg_o
+    input = dut.{{NetUtils.get_source(module.pins['in']).name}}
+    out = dut.{{module.pins['out']._model.name}}
+    cfg_e = dut.{{NetUtils.get_source(module.pins['cfg_e']).name}}
+    cfg_we = dut.{{NetUtils.get_source(module.pins['cfg_we']).name}}
+    cfg_i = dut.{{NetUtils.get_source(module.pins['cfg_i']).name}}
+    cfg_o = dut.{{module.pins['cfg_o']._model.name}}
     
     # No. of input bits
     # n_input = input()
-    n_input = int(math.log({{module.cfg_bitcount}},2))
+    n_input = int(math.log({{module.model.cfg_bitcount}},2))
 
     # Setting up LUT
     # Set the value of cfd
@@ -65,15 +65,15 @@ def changing_config(dut):
     clk = dut.cfg_clk
 
     # Signals
-    input = dut.bits_in
-    out = dut.out
-    cfg_e = dut.cfg_e
-    cfg_we = dut.cfg_we
-    cfg_i = dut.cfg_i
-    cfg_o = dut.cfg_o
-    
+    input = dut.{{NetUtils.get_source(module.pins['in']).name}}
+    out = dut.{{module.pins['out']._model.name}}
+    cfg_e = dut.{{NetUtils.get_source(module.pins['cfg_e']).name}}
+    cfg_we = dut.{{NetUtils.get_source(module.pins['cfg_we']).name}}
+    cfg_i = dut.{{NetUtils.get_source(module.pins['cfg_i']).name}}
+    cfg_o = dut.{{module.pins['cfg_o']._model.name}}
+
     # No. of input bits
-    n_input = int(math.log({{module.cfg_bitcount}},2))
+    n_input = int(math.log({{module.model.cfg_bitcount}},2))
 
     # Setting up LUT
     # Set the value of cfd

@@ -68,7 +68,23 @@ class Tester(Object, AbstractPass):
             self.renderer.add_python_test(module, path.join(f,"config.py"), "config.py")
        
         for instance in itervalues(module.instances):
+            if instance.model.module_class.is_primitive:
+                # print(instance)
+                # print(instance.name)
+                if 'lut' in instance.name:                    
+                    print("It is LUT")
+                    if not path.exists(path.join(self.tests_dir,"test_" + module.name)):
+                        os.mkdir(path.join(self.tests_dir,"test_" + module.name))
+                        
+                    setattr(module,"verilog_file",path.join(self.rtl_dir,module.name+".v"))
+                    self.renderer.add_makefile(module, path.join(f,"Makefile"), "test_lut.tmpl")
+                    self.renderer.add_python_test(instance, path.join(f,"test.py"), "test_instance_lut.tmpl.py")
+                    self.renderer.add_python_test(module, path.join(f,"config.py"), "config.py")
+       
+                # print(instance.model.module_name)
+
             self._process_module(instance.model)
+
 
     @property
     def key(self):

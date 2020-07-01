@@ -130,6 +130,8 @@ class TranslationPass(Object, AbstractPass):
             kwargs['coalesce_connections'] = True
         else:
             kwargs['conn_graph'] = MemOptNonCoalescedConnGraph()
+        if module.module_class.is_primitive:
+            kwargs['primitive_class'] = module.primitive_class
         # special case for IO block
         if module.module_class.is_io_block:
             assert not module._coalesce_connections
